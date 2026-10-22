@@ -90,9 +90,14 @@ class QueueManager(
             }.getOrNull()
         }
 
-        // Rebuild the device profile for this session so the max allowed video resolution from the
-        // web client settings is included. The server uses it to scale the transcode output down.
-        deviceProfile = deviceProfileBuilder.getDeviceProfile(preferences?.maxVideoWidth ?: 0)
+        // Rebuild the device profile for this session so the max allowed video resolution and the
+        // maximum allowed audio channels from the web client settings are included. The server uses
+        // them to scale the transcode output down and to downmix the audio instead of passing a
+        // multi-channel track through that the device cannot render.
+        deviceProfile = deviceProfileBuilder.getDeviceProfile(
+            maxVideoWidth = preferences?.maxVideoWidth ?: 0,
+            maxAudioChannels = preferences?.maxAudioChannels ?: 0,
+        )
 
         when (playOptions.playFromDownloads) {
             true -> playOptions.mediaSourceId?.let {

@@ -1,5 +1,7 @@
 package org.jellyfin.mobile.player.deviceprofile
 
+import android.content.Context
+import android.media.AudioManager
 import android.media.MediaCodecList
 import android.media.MediaFormat
 import kotlinx.serialization.json.buildJsonObject
@@ -24,6 +26,7 @@ import org.jellyfin.sdk.model.api.SubtitleProfile
 import org.jellyfin.sdk.model.api.TranscodingProfile
 
 class DeviceProfileBuilder(
+    private val context: Context,
     private val appPreferences: AppPreferences,
 ) {
     private val supportedVideoCodecs: Array<Array<String>>
@@ -119,9 +122,10 @@ class DeviceProfileBuilder(
     }
 
     /**
-     * Build the device profile for the native player, limiting video to [maxVideoWidth] when non-zero.
+     * Build the device profile for the native player, limiting video to [maxVideoWidth] and audio to
+     * [maxAudioChannels] when non-zero. A zero [maxAudioChannels] means the device decides.
      */
-    fun getDeviceProfile(maxVideoWidth: Int = 0): DeviceProfile {
+    fun getDeviceProfile(maxVideoWidth: Int = 0, maxAudioChannels: Int = 0): DeviceProfile {
         val containerProfiles = ArrayList<ContainerProfile>()
         val directPlayProfiles = ArrayList<DirectPlayProfile>()
         val codecProfiles = ArrayList<CodecProfile>()
@@ -178,6 +182,25 @@ class DeviceProfileBuilder(
             )
         }
 
+        // Cap the audio channels like Jellyfin Web does: the "Maximum Allowed Audio Channels" setting
+        // when it is set, otherwise the device's own audio output. Without this the server stream
+        // copies a 7.1 track the device cannot render instead of downmixing it.
+        val audioChannels = resolveAudioChannels(maxAudioChannels)
+        codecProfiles.add(
+            CodecProfile(
+                type = CodecType.VIDEO_AUDIO,
+                applyConditions = emptyList(),
+                conditions = listOf(
+                    ProfileCondition(
+                        condition = ProfileConditionType.LESS_THAN_EQUAL,
+                        property = ProfileConditionValue.AUDIO_CHANNELS,
+                        value = audioChannels.toString(),
+                        isRequired = false,
+                    ),
+                ),
+            ),
+        )
+
         val subtitleProfiles = when {
             appPreferences.exoPlayerDirectPlayAss -> {
                 getSubtitleProfiles(EXO_EMBEDDED_SUBTITLES + SUBTITLES_SSA, EXO_EXTERNAL_SUBTITLES + SUBTITLES_SSA)
@@ -188,7 +211,13 @@ class DeviceProfileBuilder(
         return DeviceProfile(
             name = Constants.APP_INFO_NAME,
             directPlayProfiles = directPlayProfiles,
-            transcodingProfiles = transcodingProfiles,
+            transcodingProfiles = transcodingProfiles.map { profile ->
+                if (profile.type == DlnaProfileType.VIDEO) {
+                    profile.copy(maxAudioChannels = audioChannels.toString())
+                } else {
+                    profile
+                }
+            },
             containerProfiles = containerProfiles,
             codecProfiles = codecProfiles,
             subtitleProfiles = subtitleProfiles,
@@ -196,6 +225,27 @@ class DeviceProfileBuilder(
             maxStaticBitrate = MAX_STATIC_BITRATE,
             musicStreamingTranscodingBitrate = MAX_MUSIC_TRANSCODING_BITRATE,
         )
+    }
+
+    /**
+     * Resolve the audio channel limit: the "Maximum Allowed Audio Channels" setting when it is set,
+     * otherwise the number of channels the device can actually output.
+     */
+    private fun resolveAudioChannels(requested: Int): Int {
+        if (requested > 0) {
+            return requested.coerceIn(1, MAX_AUDIO_CHANNELS)
+        }
+
+        // Use the channel counts the connected output devices actually advertise. AudioManager calls
+        // like this can throw on some devices, in which case fall back to stereo like Jellyfin Web.
+        val outputChannels = runCatching {
+            context.getSystemService(AudioManager::class.java)
+                ?.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+                ?.flatMap { it.channelCounts.toList() }
+                ?.maxOrNull()
+        }.getOrNull()
+
+        return outputChannels?.coerceIn(1, MAX_AUDIO_CHANNELS) ?: MIN_AUDIO_CHANNELS
     }
 
     private fun generateCodecProfile(
@@ -361,6 +411,12 @@ class DeviceProfileBuilder(
             // 3gp
             arrayOf("3gpp", "aac", "flac"),
         )
+
+        /** Highest audio channel count that can be reported to the server. */
+        private const val MAX_AUDIO_CHANNELS = 8
+
+        /** Audio channel count used when the device does not tell us, matching Jellyfin Web. */
+        private const val MIN_AUDIO_CHANNELS = 2
 
         /**
          * List of audio codecs that will be added to the device profile regardless of [MediaCodecList] advertising them.

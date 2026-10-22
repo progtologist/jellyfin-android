@@ -1,11 +1,12 @@
 export class ExoPlayerPlugin {
-    constructor({ events, playbackManager, appSettings, loading }) {
+    constructor({ events, playbackManager, appSettings, loading, dashboard }) {
         window['ExoPlayer'] = this;
 
         this.events = events;
         this.playbackManager = playbackManager;
         this.appSettings = appSettings;
         this.loading = loading;
+        this.dashboard = dashboard;
 
         this.name = 'ExoPlayer';
         this.type = 'mediaplayer';
@@ -32,10 +33,18 @@ export class ExoPlayerPlugin {
         const limitVideoResolution = this.appSettings.limitSupportedVideoResolution?.();
         const maxVideoWidth = limitVideoResolution ? (this.appSettings.maxVideoWidth?.() ?? 0) : 0;
 
+        // Read the "Maximum Allowed Audio Channels" playback setting (2 = stereo, 6 = 5.1). Zero
+        // means automatic, which the native side resolves from the device's audio output. Guarded
+        // like the setting above, as an older server's web client may not provide these.
+        const userId = this.dashboard?.getCurrentUserId?.();
+        const allowedAudioChannels = parseInt(this.appSettings.get?.('allowedAudioChannels', userId), 10);
+        const maxAudioChannels = allowedAudioChannels > 0 ? allowedAudioChannels : 0;
+
         const preferences = {
             maxStreamingBitrateLocal: this.appSettings.maxStreamingBitrate(true, 'Video'),
             maxStreamingBitrateRemote: this.appSettings.maxStreamingBitrate(false, 'Video'),
             maxVideoWidth,
+            maxAudioChannels,
         };
 
         this._paused = false;

@@ -10,4 +10,5 @@ data class PlayerWebPreferences(
     val maxStreamingBitrateLocal: Int,
     val maxStreamingBitrateRemote: Int,
     val maxVideoWidth: Int = 0,
+    val maxAudioChannels: Int = 0,
 ) : Parcelable
